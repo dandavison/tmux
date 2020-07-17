@@ -1293,6 +1293,7 @@ tty_draw_line(struct tty *tty, struct window_pane *wp, struct screen *s,
 		    gcp->fg != last.fg ||
 		    gcp->bg != last.bg ||
 		    gcp->us != last.us ||
+		    gcp->link != last.link ||
 		    ux + width + gcp->data.width > nx ||
 		    (sizeof buf) - len < gcp->data.size)) {
 			tty_attributes(tty, &last, wp);
@@ -1891,6 +1892,8 @@ tty_reset(struct tty *tty)
 	struct grid_cell	*gc = &tty->cell;
 
 	if (!grid_cells_equal(gc, &grid_default_cell)) {
+		if (gc->link != 0)
+			tty_putcode(tty, TTYC_HLR);
 		if ((gc->attr & GRID_ATTR_CHARSET) && tty_acs_needed(tty))
 			tty_putcode(tty, TTYC_RMACS);
 		tty_putcode(tty, TTYC_SGR0);
@@ -2173,6 +2176,29 @@ out:
 	tty->cy = cy;
 }
 
+static void
+tty_hyperlink(struct tty *tty, const struct grid_cell *gc)
+{
+	struct hyperlink	*hl;
+	char			 s[16];
+
+	if (gc->link == tty->cell.link)
+		return;
+	tty->cell.link = gc->link;
+
+	if (gc->link == 0)
+		tty_putcode(tty, TTYC_HLR);
+	else {
+		hl = server_get_hyperlink(gc->link);
+		if (hl == NULL)
+			tty_putcode(tty, TTYC_HLR);
+		else {
+			snprintf(s, sizeof s, "%u", hl->id);
+			tty_putcode_ptr2(tty, TTYC_HLS, s, hl->link);
+		}
+	}
+}
+
 void
 tty_attributes(struct tty *tty, const struct grid_cell *gc,
     struct window_pane *wp)
@@ -2187,7 +2213,8 @@ tty_attributes(struct tty *tty, const struct grid_cell *gc,
 	    gc->attr == tty->last_cell.attr &&
 	    gc->fg == tty->last_cell.fg &&
 	    gc->bg == tty->last_cell.bg &&
-	    gc->us == tty->last_cell.us)
+	    gc->us == tty->last_cell.us &&
+	    gc->link == tty->last_cell.link)
 		return;
 	tty->last_wp = (wp != NULL ? (int)wp->id : -1);
 	memcpy(&tty->last_cell, gc, sizeof tty->last_cell);
@@ -2270,6 +2297,9 @@ tty_attributes(struct tty *tty, const struct grid_cell *gc,
 		tty_putcode(tty, TTYC_SMOL);
 	if ((changed & GRID_ATTR_CHARSET) && tty_acs_needed(tty))
 		tty_putcode(tty, TTYC_SMACS);
+
+	/* Set hyperlink if any. */
+	tty_hyperlink(tty, gc);
 }
 
 static void
